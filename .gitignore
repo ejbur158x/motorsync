@@ -1,0 +1,7 @@
+objw/
+obj/
+obj3/
+esfast
+esnative
+*.wav.out
+node_modules/
