@@ -83,6 +83,11 @@ static double *field(EngineSpec &s, const std::string &k) {
     F("frictionLbFt", s.frictionLbFt) F("starterTorqueLbFt", s.starterTorqueLbFt) F("starterRpm", s.starterRpm)
     F("simFrequency", s.simFrequency) F("noise", s.noise) F("jitter", s.jitter) F("hfGain", s.hfGain)
     F("flowAttenuation", s.flowAttenuation) F("chamberCc", s.chamberCc) F("throttleGamma", s.throttleGamma)
+    F("compHeightMm", s.compHeightMm) F("crankMomentFactor", s.crankMomentFactor) F("tdcDeg", s.tdcDeg) F("rodMassG", s.rodMassG)
+    F("otherMomentMassKg", s.otherMomentMassKg) F("runnerFlowCarb", s.runnerFlowCarb) F("plenumAreaCm2", s.plenumAreaCm2)
+    F("intakeRunnerCc", s.intakeRunnerCc) F("exhaustRunnerCc", s.exhaustRunnerCc) F("intakeVelocityDecay", s.intakeVelocityDecay)
+    F("vehicleMassLb", s.vehicleMassLb) F("diffRatio", s.diffRatio) F("maxClutchTorqueLbFt", s.maxClutchTorqueLbFt)
+    F("lobeGamma", s.lobeGamma) F("flywheelRadiusIn", s.flywheelRadiusIn)
 #undef F
     if (!s.exhaust.empty()) {
         ExhaustSpec &e = s.exhaust[0];
@@ -93,15 +98,16 @@ static double *field(EngineSpec &s, const std::string &k) {
     }
     return nullptr;
 }
-static double g_timingScale = 1, g_bank2 = 1, g_primary = -1, g_irSel = -1, g_fluidOver = -1;
+static double g_timingScale = 1, g_bank2 = 1, g_primary = -1, g_irSel = -1, g_fluidOver = -1, g_flowScale = 1;
 static double *special(const std::string &k) {
     if (k == "timingScale") return &g_timingScale; if (k == "bank2Volume") return &g_bank2;
     if (k == "primaryLenIn") return &g_primary; if (k == "exIr") return &g_irSel; if (k == "fluidSteps") return &g_fluidOver;
+    if (k == "flowScale") return &g_flowScale;
     return nullptr;
 }
 
 static void applyOverrides(EngineSpec &s) {
-    g_timingScale = 1; g_bank2 = 1; g_primary = -1; g_irSel = -1; g_fluidOver = -1;
+    g_timingScale = 1; g_bank2 = 1; g_primary = -1; g_irSel = -1; g_fluidOver = -1; g_flowScale = 1;
     // exhaust keys: remember each exhaust's offset from exhaust 0 so per-pipe differences (e.g. the LS's 100/172 in) survive
     std::vector<ExhaustSpec> base = s.exhaust;
     for (auto &kv : g_over) {
@@ -118,6 +124,27 @@ static void applyOverrides(EngineSpec &s) {
     if (g_timingScale != 1) for (auto &c : s.timing) c.y *= g_timingScale;
     if (g_primary >= 0) { double mx = 0; for (auto &c : s.cyl) mx = std::max(mx, c.primaryLenIn); for (auto &c : s.cyl) c.primaryLenIn = mx > 0 ? c.primaryLenIn * g_primary / mx : g_primary; }
     if (g_fluidOver > 0) g_fluid = (int)g_fluidOver;
+    if (g_flowScale != 1) { for (auto &f : s.intakeFlow) f.cfm *= g_flowScale; for (auto &f : s.exhaustFlow) f.cfm *= g_flowScale; }
+}
+
+// Custom engine (preset 2): geometry arrives as keys "nCyl", "nBanks", "nJour", "nEx", "bank.<i>" (deg),
+// "jour.<i>" (deg), "cyl.<i>.bank|jour|ex|fire|prim|att", "ex.<i>.len" (length multiplier).
+// The head, port flow, intake and gearbox start from the 2JZ and are reshaped by the scalar keys.
+static double ov(const std::string &k, double d) { auto it = g_over.find(k); return it == g_over.end() ? d : it->second; }
+static EngineSpec customSpec() {
+    EngineSpec s = preset2JZ(); s.name = "Custom";
+    const int n = (int)ov("nCyl", 4), nb = (int)ov("nBanks", 1), nj = (int)ov("nJour", n), ne = (int)ov("nEx", 1);
+    s.bankAngleDeg.assign(nb, 0); for (int i = 0; i < nb; ++i) s.bankAngleDeg[i] = ov("bank." + std::to_string(i), 0);
+    s.journalDeg.assign(nj, 0); for (int i = 0; i < nj; ++i) s.journalDeg[i] = ov("jour." + std::to_string(i), 0);
+    s.cyl.clear();
+    for (int i = 0; i < n; ++i) {
+        const std::string c = "cyl." + std::to_string(i) + ".";
+        CylSpec cs; cs.bank = (int)ov(c + "bank", 0); cs.journal = (int)ov(c + "jour", i); cs.exhaust = (int)ov(c + "ex", 0);
+        cs.fireDeg = ov(c + "fire", i * 720.0 / n); cs.primaryLenIn = ov(c + "prim", 2); cs.soundAtt = ov(c + "att", 1); cs.blowby = 0.05;
+        s.cyl.push_back(cs);
+    }
+    ExhaustSpec e = s.exhaust[0]; s.exhaust.assign(ne, e);
+    return s;
 }
 
 // Read a value from the current (built) spec, or the preset's default before any build.
@@ -146,7 +173,7 @@ API int es_live(double v) {
     }
     if (k == "exAudioVolume" || k == "bank2Volume") {
         EngineSpec fresh = g_spec; // recompute per-pipe volumes from the overrides
-        double base0 = (g_presetIdx == 1 ? presetCrossPlaneV8() : preset2JZ()).exhaust[0].audioVolume;
+        double base0 = (g_presetIdx == 1 ? presetCrossPlaneV8() : preset2JZ()).exhaust[0].audioVolume; // custom starts from the 2JZ
         double vol = g_over.count("exAudioVolume") ? g_over["exAudioVolume"] : base0;
         double b2 = g_over.count("bank2Volume") ? g_over["bank2Volume"] : 1;
         for (int i = 0; i < (int)g_spec.exhaust.size(); ++i) {
@@ -174,9 +201,10 @@ API int es_live(double v) {
 API int es_create(int preset) {
     g_presetIdx = preset;
     destroy();
-    g_spec = preset == 1 ? presetCrossPlaneV8() : preset2JZ();
+    g_spec = preset == 2 ? customSpec() : preset == 1 ? presetCrossPlaneV8() : preset2JZ();
     g_fluid = 4; g_spec.simFrequency = 7000;
     applyOverrides(g_spec);
+    for (size_t i = 0; i < g_spec.exhaust.size(); ++i) g_spec.exhaust[i].lengthIn *= ov("ex." + std::to_string(i) + ".len", 1);
     if (!buildEngine(g_spec, loadIr, &g_be, &g_err)) return 0;
     ((PistonEngineSimulator *)g_be.simulator)->setFluidSimulationSteps(g_fluid);
     return g_be.engine->getCylinderCount();
@@ -225,6 +253,10 @@ API void es_starter_params(double rpm, double torque) {
     m.m_rotationSpeed = -units::rpm(rpm > 0 ? rpm : g_spec.starterRpm);
     m.m_maxTorque = units::torque(torque > 0 ? torque : g_spec.starterTorqueLbFt, units::ft_lb);
 }
+// Forced induction and brakes, set every frame by the host.
+API void es_set_boost(double psi) { if (g_be.engine) g_be.engine->getIntake(0)->m_boostPressure = (psi > 0 ? psi : 0) * 6894.757; }
+API void es_set_brake(double newtons) { if (g_be.vehicle) g_be.vehicle->m_brakeForce = newtons > 0 ? newtons : 0; }
+API double es_intake_flow() { return g_be.engine ? g_be.engine->getIntake(0)->m_flowRate : 0; }
 API int es_gear() { return g_be.transmission ? g_be.transmission->getGear() : -1; }
 API double es_manifold_pressure() { return g_be.engine ? units::convert(g_be.engine->getManifoldPressure(), units::inHg) : 0; }
 API double es_speed_mph() { return g_be.vehicle ? units::convert(g_be.vehicle->getSpeed(), units::mile / units::hour) : 0; }

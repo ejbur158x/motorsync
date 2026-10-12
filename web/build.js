@@ -7,6 +7,8 @@ const sub = (tag, val) => { if (!html.includes(tag)) throw new Error('missing ' 
 sub('"/*__WASM_B64__*/"', JSON.stringify(fs.readFileSync(path.join(root, 'es.wasm')).toString('base64')));
 sub('/*__IRS_JSON__*/{}', JSON.stringify(irs));
 sub('/*__LOADER__*/""', JSON.stringify(fs.readFileSync(path.join(__dirname, 'es-loader.js'), 'utf8')));
+sub('/*__FORCED__*/""', JSON.stringify(fs.readFileSync(path.join(__dirname, 'forced.js'), 'utf8')));
+sub('/*__BUILDER_INLINE__*/', fs.readFileSync(path.join(__dirname, 'builder.js'), 'utf8').replace(/<\/script/gi, '<\\/script'));
 sub('/*__WORKER__*/""', JSON.stringify(fs.readFileSync(path.join(__dirname, 'worker.js'), 'utf8')));
 sub('/*__WORKLET__*/""', JSON.stringify(fs.readFileSync(path.join(__dirname, 'worklet.js'), 'utf8')));
 sub('/*__LICENSE__*/""', JSON.stringify(fs.readFileSync(path.join(root, 'engine-sim', 'LICENSE'), 'utf8')));

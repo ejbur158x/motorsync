@@ -46,6 +46,8 @@ class Intake : public Part {
         void process(double dt);
 
         inline double getRunnerFlowRate() const { return m_runnerFlowRate; }
+        double m_boostPressure = 0; // [port] forced induction: pressure above atmosphere ahead of the throttle (Pa)
+
         inline double getThrottlePlatePosition() const { return m_idleThrottlePlatePosition * m_throttle; }
         inline double getRunnerLength() const { return m_runnerLength; }
         inline double getPlenumCrossSectionArea() const { return m_crossSectionArea; }

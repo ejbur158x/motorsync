@@ -31,6 +31,7 @@ class Vehicle {
         inline double getTravelledDistance() const { return m_travelledDistance; }
         inline void resetTravelledDistance() { m_travelledDistance = 0; }
         double linearForceToVirtualTorque(double force) const;
+        double m_brakeForce = 0; // [port] extra resisting force from the brakes (N)
 
     protected:
         atg_scs::RigidBody *m_rotatingMass;
