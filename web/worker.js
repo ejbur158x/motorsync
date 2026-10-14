@@ -130,8 +130,9 @@
     x.es_set_throttle(thr);
   }
 
+  let paused = false;
   function pump() {
-    if (busy || !x || !port) return;
+    if (busy || paused || !x || !port) return;
     busy = true;
     const t0 = performance.now(); let simT = 0;
     while (produced - consumed < TARGET && performance.now() - t0 < 40) {
@@ -175,6 +176,7 @@
     else if (m.type === 'build') build(m);
     else if (m.type === 'live') { const ok = es.live(m.key, m.value); if (m.key === 'revLimitRpm') ST.revLimit = m.value; if (!ok) post({ type: 'needsRebuild', key: m.key }); }
     else if (m.type === 'fi') fi.configure(Object.assign({}, fi.cfg, m.fi));
+    else if (m.type === 'pause') paused = !!m.value;   // Standard mode is active: stop simulating
     else if (m.type === 'throttle') ST.pedal = m.value;
     else if (m.type === 'brake') ST.brake = m.value;
     else if (m.type === 'start') { if (ST.on || ST.auto) stopEngine(); else startEngine(); }

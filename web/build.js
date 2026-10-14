@@ -10,8 +10,20 @@ sub('/*__LOADER__*/""', JSON.stringify(fs.readFileSync(path.join(__dirname, 'es-
 sub('/*__FORCED__*/""', JSON.stringify(fs.readFileSync(path.join(__dirname, 'forced.js'), 'utf8')));
 sub('/*__BUILDER_INLINE__*/', fs.readFileSync(path.join(__dirname, 'builder.js'), 'utf8').replace(/<\/script/gi, '<\\/script'));
 sub('/*__WORKER__*/""', JSON.stringify(fs.readFileSync(path.join(__dirname, 'worker.js'), 'utf8')));
+const rd = (f) => fs.readFileSync(path.join(__dirname, f), 'utf8');
+const i6 = rd('std/i6-core.js'), helpers = i6.split('class I6Core')[0];
+const stdWorklet = [
+  `const I6Core = (() => {\n${i6}\nreturn I6Core; })();`,
+  `const V8Core = (() => {\n${rd('std/v8-core.js')}\nreturn V8Core; })();`,
+  rd('forced.js'),
+  `const GenericCore = (() => {\n${helpers}\nconst ForcedInduction = globalThis.MSForced.ForcedInduction;\n${rd('std/generic-core.js')}\nreturn GenericCore; })();`,
+  rd('std/worklet-proc.js'),
+].join('\n');
+sub('/*__STD_WORKLET__*/""', JSON.stringify(stdWorklet));
+sub('/*__CAR_INLINE__*/', rd('std/car.js').replace(/<\/script/gi, '<\\/script'));
 sub('/*__WORKLET__*/""', JSON.stringify(fs.readFileSync(path.join(__dirname, 'worklet.js'), 'utf8')));
 sub('/*__LICENSE__*/""', JSON.stringify(fs.readFileSync(path.join(root, 'engine-sim', 'LICENSE'), 'utf8')));
+sub('/*__MAIN_SCRIPT__*/', '<script>\n' + rd('app.js').replace(/<\/script/gi, '<\\/script') + '\n</script>');
 const out = path.join(root, 'index.html');
 fs.writeFileSync(out, html);
 console.log('index.html', (html.length / 1024).toFixed(0), 'KB');

@@ -132,5 +132,6 @@
     }
   }
   const api = { ForcedInduction, SC_TYPES: Object.keys(SC) };
-  if (typeof module !== 'undefined') module.exports = api; else root.MSForced = api;
-})(typeof self !== 'undefined' ? self : this);
+  if (root) root.MSForced = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})(typeof self !== 'undefined' ? self : typeof globalThis !== 'undefined' ? globalThis : this);

@@ -73,7 +73,13 @@
         const s = f.slice().sort((a, b) => a - b);
         let mx = 0, sq = 0;
         for (let i = 0; i < n; i++) { const g = i < n - 1 ? s[i + 1] - s[i] : 720 - s[n - 1] + s[0]; mx = Math.max(mx, g); sq += g * g; }
-        const score = mx * 1e4 + sq;
+        // tie-break: the most even pattern within each bank (a real cross-plane fires each bank 90-180-270-180)
+        let bankMx = 0;
+        for (let b = 0; b < 2; b++) {
+          const fb = f.filter((_, i) => cyl[i].bank === b).map((v) => v % 720).sort((a, c) => a - c);
+          for (let i = 0; i < fb.length; i++) bankMx += Math.pow(i < fb.length - 1 ? fb[i + 1] - fb[i] : 720 - fb[fb.length - 1] + fb[0], 2);
+        }
+        const score = mx * 1e8 + sq * 1e2 + bankMx * 1e-2;
         if (score < bestScore) { bestScore = score; best = f; }
       }
       cyl.forEach((c, i) => (c.fire = best[i]));
@@ -171,6 +177,24 @@
     };
   }
 
-  const api = { LAYOUTS, crankOptions, defaultVAngle, geometry, buildSpec, fiFor, inlineOrder };
+  // Standard mode: the same build, for our procedural synth (std/generic-core.js) and the simple car model.
+  function stdSynth(sp, cfg) {
+    const p = sp.params, n = sp.n, ch = Math.max(0, Math.min(1, cfg.character ?? 0.3));
+    const fire = [], pipe = [];
+    for (let i = 0; i < n; i++) { fire.push(p['cyl.' + i + '.fire']); pipe.push(p['cyl.' + i + '.ex']); }
+    const lsa = cfg.lsa ?? 117 - 9 * ch, dur = cfg.duration ?? 214 + 50 * ch;
+    const lumpy = Math.max(0, Math.min(1.5, (117 - lsa) / 9 * 0.6 + (dur - 214) / 50 * 0.4));
+    return {
+      n, fire, pipe, nPipes: p.nEx, liters: sp.liters, layout: sp.layout, crank: sp.crank,
+      idleRpm: 850 - 50 * Math.min(1, Math.max(0, (sp.liters - 3) / 3)) + 150 * lumpy, redline: p.revLimitRpm,
+      character: ch, thump: cfg.thump ?? 0.3 + 0.6 * lumpy, unequal: cfg.headers === 'unequal',
+      exLen: Math.max(0.5, Math.min(2, (cfg.exLengthIn ?? 100) / 100)), fi: sp.fi,
+      // car model: peak torque per liter (N·m), where it peaks, how fast it revs
+      tqPerL: 95 + 15 * ch - 8 * Math.max(0, (cfg.compression ?? 10) < 9 ? 1 : 0), peakAt: 0.5 + 0.3 * ch,
+      revUp: Math.max(0.5, Math.min(2.2, Math.sqrt(10 / p.flywheelMassKg) * Math.pow(3 / sp.liters, 0.25))),
+    };
+  }
+
+  const api = { LAYOUTS, crankOptions, defaultVAngle, geometry, buildSpec, fiFor, inlineOrder, stdSynth };
   if (typeof module !== 'undefined') module.exports = api; else root.MSBuilder = api;
 })(typeof self !== 'undefined' ? self : this);

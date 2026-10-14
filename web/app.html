@@ -46,7 +46,7 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 .pill.warn { color: var(--amber); border-color: var(--amber-dim); }
 .cpu { position: absolute; top: 12px; right: 12px; font: 500 12px var(--mono); color: var(--muted); }
 
-.tabs { display: grid; grid-template-columns: repeat(4, 1fr); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 4px; gap: 4px; position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; }
+.tabs { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 4px; gap: 4px; position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; }
 .tabs button { font: 700 14px var(--display); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); background: none; border: 0; border-radius: 10px; padding: 10px 0; cursor: pointer; }
 .tabs button[aria-selected="true"] { background: var(--amber); color: #1b1206; }
 
@@ -134,6 +134,10 @@ details.adv .rows { margin-top: 8px; }
 footer { font-size: 12px; color: var(--muted); line-height: 1.5; }
 footer a { color: var(--fg); }
 footer pre { white-space: pre-wrap; font: 11px var(--mono); max-height: 160px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
+.modesw button { padding: 6px 12px; }
+.card.warn { border-color: var(--amber-dim); background: color-mix(in srgb, var(--amber) 7%, var(--panel)); }
+.banner { margin: 0; font-size: 12px; line-height: 1.45; color: var(--amber); background: color-mix(in srgb, var(--amber) 8%, var(--panel)); border: 1px solid var(--amber-dim); border-radius: 12px; padding: 8px 12px; }
+.toggle { display: inline-flex; gap: 8px; align-items: center; font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
@@ -141,11 +145,19 @@ footer pre { white-space: pre-wrap; font: 11px var(--mono); max-height: 160px; o
   <div class="col side">
     <header>
       <div class="brand"><img src="logo.png" alt="" onerror="this.remove()"><span class="word">MOTOR<b>SYNC</b></span></div>
-      <span class="engine-name" id="engName">–</span>
+      <div class="seg2 modesw" role="group" aria-label="Sound engine"><button id="modeStd" aria-pressed="true">Standard</button><button id="modePhys" aria-pressed="false">Physics</button></div>
     </header>
+    <span class="engine-name" id="engName">–</span>
+    <section class="card warn" id="physWarn" hidden aria-labelledby="pwTitle">
+      <h3 id="pwTitle">Engine physics simulation</h3>
+      <p class="sub">This mode runs Ange Yaghi's engine-sim: real pistons, valves, gas flow and exhaust pulses, simulated thousands of times a second on your phone. It keeps one CPU core busy the whole time, so expect the phone to get warm and the battery to drain faster. Older or budget phones may not keep up, and you'll hear gaps. Big engines (10+ cylinders) are the heaviest.</p>
+      <p class="sub">Standard mode is our tuned synth: light, smooth, and it runs on anything.</p>
+      <div class="btns"><button class="btn primary" id="pwGo">Use physics mode</button><button class="btn" id="pwNo">Stay on Standard</button></div>
+    </section>
+    <p class="banner" id="physBanner" hidden>Physics mode: heavy on CPU and battery. Watch the CPU % in the corner; step down quality in Build → Advanced if the sound gaps.</p>
     <section class="cluster" aria-label="Instrument cluster">
       <span class="pill" id="status">Off</span>
-      <span class="cpu" id="cpu" title="How hard the physics is working your CPU">CPU –</span>
+      <span class="cpu" id="cpu" title="How hard the physics is working your CPU" hidden>CPU –</span>
       <canvas id="tach" aria-label="Tachometer"></canvas>
       <div class="readouts">
         <div class="ro"><div class="k">Gear</div><div class="v" id="roGear">N</div></div>
@@ -261,7 +273,7 @@ footer pre { white-space: pre-wrap; font: 11px var(--mono); max-height: 160px; o
     </section>
 
     <footer>
-      Physics and audio: <a href="https://github.com/ange-yaghi/engine-sim" target="_blank" rel="noopener">engine-sim</a> by Ange Yaghi, compiled to WebAssembly and running on your device. Turbo and supercharger sound and boost model: MOTORSYNC.
+      Standard mode: MOTORSYNC's procedural synth (the I6 Turbo and SLR V8 cores, plus a builder synth for any layout). Physics mode: <a href="https://github.com/ange-yaghi/engine-sim" target="_blank" rel="noopener">engine-sim</a> by Ange Yaghi, compiled to WebAssembly and running on your device, with MOTORSYNC's boost model and turbo/supercharger sound.
       <details class="adv"><summary>engine-sim license (MIT)</summary><pre id="lic"></pre></details>
     </footer>
   </div>
@@ -274,511 +286,9 @@ const LOADER_SRC = /*__LOADER__*/"";
 const FORCED_SRC = /*__FORCED__*/"";
 const WORKER_SRC = /*__WORKER__*/"";
 const WORKLET_SRC = /*__WORKLET__*/"";
+const STD_WORKLET_SRC = /*__STD_WORKLET__*/"";
 const LICENSE = /*__LICENSE__*/"";
 </script>
 <script>/*__BUILDER_INLINE__*/</script>
-<script>
-const $ = (id) => document.getElementById(id);
-const b64 = (s) => { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-$('lic').textContent = LICENSE;
-const B = window.MSBuilder;
-
-// ---------------------------------------------------------------- engines
-const IR_NAMES = ['Reverb pipe', 'Dry pipe', 'Muffled I', 'Muffled II', 'Muffled III', 'Smooth'];
-const QUALITY = [
-  { name: 'Lite', simFrequency: 5000, fluidSteps: 4 },
-  { name: 'Normal', simFrequency: 7000, fluidSteps: 4 },
-  { name: 'High', simFrequency: 10000, fluidSteps: 8 },
-];
-const CYL_NUM = { 0: [1, 2, 3, 4, 5, 6], 1: [1, 3, 5, 7, 2, 4, 6, 8] };
-// Garage presets. base 0/1 = Ange's 2JZ / GM LS scripts (exact), 2 = generated by the builder.
-const PRESETS = [
-  { id: 'msI6T', name: 'MotorSync I6 Turbo', spec: '3.0L I6 · 18 psi', base: 0, params: { revLimitRpm: 7200, timingScale: 0.85 },
-    fi: { type: 'turbo', turboPsi: 18, spoolStart: 1700, spoolFull: 4300, spoolTime: 1.55, bov: 0, turboLevel: 1.6 },
-    cfg: { layout: 'I', cyl: 6, liters: 3.0, aspiration: 'turbo', boostPsi: 18, character: 0.4 } },
-  { id: 'slr', name: 'SLR Supercharged V8', spec: '5.4L V8 · twin-screw', base: 1, params: { boreMm: 97, strokeMm: 92, revLimitRpm: 6500, redlineRpm: 6100, exLengthIn: 70, timingScale: 0.85 },
-    fi: { type: 'sc', scPsi: 13, scType: 'screw', scLevel: 0.85, scEee: 2, scChop: 0.75, scOff: 0.07, scHalf: 0.75, scPitch: 1 },
-    cfg: { layout: 'V', cyl: 8, liters: 5.4, aspiration: 'sc', boostPsi: 13, character: 0.3, crank: 'cross' } },
-  { id: 'jz', name: '2JZ', spec: '3.0L I6 · NA · stock', base: 0, params: {}, fi: { type: 'na' }, cfg: { layout: 'I', cyl: 6, liters: 3.0, aspiration: 'na', character: 0.3 } },
-  { id: 'ls', name: 'GM LS', spec: '5.3L V8 · NA · stock', base: 1, params: {}, fi: { type: 'na' }, cfg: { layout: 'V', cyl: 8, liters: 5.3, aspiration: 'na', character: 0.3, crank: 'cross' } },
-  { id: 'i7', name: 'Twin-charged I7', spec: '3.5L I7 · 20 psi', cfg: { layout: 'I', cyl: 7, liters: 3.5, aspiration: 'twin', boostPsi: 20, character: 0.6, name: 'Twin-charged I7' } },
-  { id: 'f6', name: 'Flat-6 boxer', spec: '3.8L F6 · NA · race', cfg: { layout: 'F', cyl: 6, liters: 3.8, aspiration: 'na', character: 0.8, headers: 'unequal', name: 'Flat-6 boxer' } },
-  { id: 'v12', name: 'V12', spec: '6.5L V12 · NA', cfg: { layout: 'V', cyl: 12, liters: 6.5, aspiration: 'na', character: 0.7, name: 'V12' } },
-];
-const SOUND_DEFAULTS = { 0: { exIr: 0, exAudioVolume: 0.2, jitter: 0.23, noise: 1 }, 1: { exIr: 5, exAudioVolume: 4, jitter: 0.6, noise: 1 }, 2: { exIr: 0, exAudioVolume: 0.25, jitter: 0.45, noise: 1 } };
-
-// what's loaded: { kind: 'preset', id } or { kind: 'custom', cfg }
-let S = { cur: { kind: 'preset', id: 'msI6T' }, cfg: Object.assign({}, PRESETS[0].cfg), sound: {}, fiSound: {}, quality: 1, volume: 0.8, mine: [], dynoPrev: null, mode: 'simple' };
-try { const s = JSON.parse(localStorage.getItem('motorsync_v1') || 'null'); if (s) S = Object.assign(S, s); } catch (e) {}
-const save = () => { try { localStorage.setItem('motorsync_v1', JSON.stringify(S)); } catch (e) {} };
-
-function currentEngine() {   // -> what the worker builds
-  let e;
-  const p = S.cur.kind === 'preset' ? PRESETS.find((x) => x.id === S.cur.id) : null;
-  if (p && p.base !== undefined) {
-    e = { preset: p.base, params: Object.assign({}, p.params), fi: Object.assign({}, p.fi), name: p.name, cylNums: CYL_NUM[p.base], idleRpm: p.base === 1 ? 650 : 850 };
-  } else {
-    const cfg = p ? p.cfg : (S.cur.cfg || S.cfg);
-    const sp = B.buildSpec(cfg);
-    e = { preset: 2, params: sp.params, fi: sp.fi, name: sp.name, cylNums: sp.cylNums, idleRpm: 850 };
-  }
-  const q = QUALITY[S.quality] || QUALITY[1];
-  const cyl = S.cur.kind === 'preset' && p && p.base !== undefined ? (p.base === 1 ? 8 : 6) : (e.params.nCyl || 6);
-  Object.assign(e.params, { simFrequency: cyl > 8 && S.quality === 1 ? 5000 : q.simFrequency, fluidSteps: q.fluidSteps });
-  Object.assign(e.params, S.sound);                     // live sound settings ride along into every rebuild
-  Object.assign(e.fi, S.fiSound);
-  return e;
-}
-const soundBase = () => SOUND_DEFAULTS[currentEngine().preset];
-
-// ---------------------------------------------------------------- audio + sim host
-let ctx = null, master = null, host = null, booting = null, hostReady = null, state = null, stats = null, built = null;
-function startHost() {
-  if (hostReady) return hostReady;
-  hostReady = (async () => {
-    const irs = {}; for (const [k, v] of Object.entries(IRS_B64)) irs[k] = b64(v);
-    const wasm = b64(WASM_B64).buffer;
-    const src = LOADER_SRC + '\n' + FORCED_SRC + '\n' + WORKER_SRC;
-    try { host = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' }))); }
-    catch (e) { host = mainThreadHost(src); }
-    host.onmessage = onHost;
-    const ready = new Promise((res) => (onHost.ready = res));
-    host.postMessage({ type: 'init', wasm, irs }, [wasm]);
-    await ready;
-  })();
-  return hostReady;
-}
-function mainThreadHost(src) {   // no Worker allowed: run the sim on this thread
-  const h = { onmessage: null, postMessage: (m) => setTimeout(() => fake.onmessage && fake.onmessage({ data: m }), 0) };
-  const fake = { postMessage: (m) => h.onmessage && h.onmessage({ data: m }), onmessage: null };
-  new Function('self', src)(fake);
-  return h;
-}
-async function boot() {
-  if (booting) return booting;
-  booting = (async () => {
-    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100, latencyHint: 'interactive' });
-    const resumed = ctx.resume().catch(() => {});
-    await startHost(); await resumed;
-    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'text/javascript' })));
-    const node = new AudioWorkletNode(ctx, 'engine-sim-player', { numberOfInputs: 0, outputChannelCount: [2] });
-    master = ctx.createGain(); master.gain.value = S.volume;
-    const limiter = ctx.createDynamicsCompressor();
-    limiter.threshold.value = -6; limiter.knee.value = 4; limiter.ratio.value = 12; limiter.attack.value = 0.002; limiter.release.value = 0.12;
-    node.connect(master).connect(limiter).connect(ctx.destination);
-    const ch = new MessageChannel();
-    node.port.postMessage({ port: ch.port2 }, [ch.port2]);
-    host.postMessage({ type: 'attach', port: ch.port1 }, [ch.port1]);
-  })();
-  return booting;
-}
-function onHost(e) {
-  const m = e.data;
-  if (m.type === 'ready') onHost.ready();
-  else if (m.type === 'built') { stats = m.stats; onBuilt(); }
-  else if (m.type === 'state') { state = m; if (m.dynoPts) dynoAdd(m.dynoPts); }
-  else if (m.type === 'nostart') toast('It didn’t catch. Tap Start to crank again.');
-  else if (m.type === 'stalled') toast('Stalled. Tap Start.');
-  else if (m.type === 'error') toast('Couldn’t build that engine: ' + m.message);
-  else if (m.type === 'dynoStart') dynoBegin(m);
-  else if (m.type === 'dynoDone') dynoEnd(m.finished);
-  else if (m.type === 'dynoMsg') toast(m.text);
-}
-function rebuild(restart) {
-  built = currentEngine();
-  $('engName').textContent = built.name;
-  if (!host) return;
-  host.postMessage({ type: 'build', preset: built.preset, params: built.params, fi: built.fi, restart, idleRpm: built.idleRpm });
-}
-function onBuilt() {
-  const nums = built.cylNums || stats.fire.map((_, i) => i + 1);
-  const order = stats.fire.map((f, i) => [((f % 720) + 720) % 720, nums[i]]).sort((a, b) => a[0] - b[0]).map((a) => a[1]).join('-');
-  $('order').textContent = 'Firing order ' + order;
-  $('roDisp').textContent = stats.liters.toFixed(1) + ' L';
-  $('roBoostK').textContent = built.fi.type === 'na' ? 'MAP inHg' : 'Boost psi';
-  renderSound(); renderGarage();
-}
-function toast(msg) { $('toast').textContent = msg; clearTimeout(toast.t); toast.t = setTimeout(() => ($('toast').textContent = ''), 4500); }
-
-// ---------------------------------------------------------------- drive controls
-const pedals = { gas: 0, brake: 0 }, keys = { gas: 0, brake: 0 };
-function sendPedal(which) {
-  const v = Math.max(pedals[which], keys[which]), el = $(which);
-  el.querySelector('.fill').style.height = (v * 100).toFixed(0) + '%';
-  el.querySelector('.pct').textContent = Math.round(v * 100) + '%';
-  el.setAttribute('aria-valuenow', Math.round(v * 100));
-  host && host.postMessage({ type: which === 'gas' ? 'throttle' : 'brake', value: v });
-}
-for (const which of ['gas', 'brake']) {
-  const el = $(which); let id = null;
-  const set = (ev) => { const r = el.getBoundingClientRect(); pedals[which] = clamp(1 - (ev.clientY - r.top - 8) / (r.height - 16), 0, 1); sendPedal(which); };
-  el.addEventListener('pointerdown', (ev) => { id = ev.pointerId; el.setPointerCapture(id); set(ev); ev.preventDefault(); });
-  el.addEventListener('pointermove', (ev) => { if (ev.pointerId === id) set(ev); });
-  const up = (ev) => { if (ev.pointerId === id) { id = null; pedals[which] = 0; sendPedal(which); } };
-  el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
-}
-async function startPressed() {
-  if (!ctx) { $('status').textContent = 'Loading'; await boot(); rebuild(true); return; }
-  if (ctx.state !== 'running') ctx.resume();
-  host.postMessage({ type: 'start' });
-}
-$('startBtn').addEventListener('click', startPressed);
-const shift = (dir) => host && host.postMessage({ type: 'shift', dir });
-$('up').addEventListener('pointerdown', (ev) => { ev.preventDefault(); shift(1); });
-$('down').addEventListener('pointerdown', (ev) => { ev.preventDefault(); shift(-1); });
-document.addEventListener('keydown', (ev) => {
-  if (ev.target.closest && ev.target.closest('input,select,textarea')) return;
-  if (ev.repeat) return;
-  const k = ev.key.toLowerCase();
-  if (k === 'w' || k === 'arrowup') { keys.gas = 1; sendPedal('gas'); ev.preventDefault(); }
-  else if (k === 's' || k === 'arrowdown') { keys.brake = 1; sendPedal('brake'); ev.preventDefault(); }
-  else if (k === ' ') { startPressed(); ev.preventDefault(); }
-  else if (k === 'e' || k === 'arrowright') shift(1);
-  else if (k === 'q' || k === 'arrowleft') shift(-1);
-});
-document.addEventListener('keyup', (ev) => {
-  const k = ev.key.toLowerCase();
-  if (k === 'w' || k === 'arrowup') { keys.gas = 0; sendPedal('gas'); }
-  if (k === 's' || k === 'arrowdown') { keys.brake = 0; sendPedal('brake'); }
-});
-
-// ---------------------------------------------------------------- tabs
-const TABS = ['drive', 'dyno', 'build', 'sync'];
-function showTab(t) {
-  for (const x of TABS) { $('t-' + x).setAttribute('aria-selected', x === t); $('p-' + x).hidden = x !== t; }
-  try { localStorage.setItem('motorsync_tab', t); } catch (e) {}
-}
-for (const t of TABS) $('t-' + t).addEventListener('click', () => showTab(t));
-
-// ---------------------------------------------------------------- form helpers
-function slider(parent, o) {   // o: {id,label,min,max,step,value,fmt,log,onInput,changed}
-  const row = document.createElement('div'); row.className = 'row';
-  const lab = document.createElement('label'); lab.htmlFor = o.id; lab.textContent = o.label;
-  const val = document.createElement('span'); val.className = 'val' + (o.changed ? ' changed' : '');
-  const inp = document.createElement('input'); inp.type = 'range'; inp.id = o.id;
-  const toPos = (v) => o.log ? Math.log(v / o.min) / Math.log(o.max / o.min) : v, fromPos = (p) => o.log ? o.min * Math.pow(o.max / o.min, p) : p;
-  if (o.log) { inp.min = 0; inp.max = 1; inp.step = 0.001; } else { inp.min = o.min; inp.max = o.max; inp.step = o.step; }
-  inp.value = toPos(o.value); val.textContent = o.fmt(o.value);
-  inp.addEventListener('input', () => { const v = fromPos(+inp.value); val.textContent = o.fmt(v); val.classList.add('changed'); o.onInput(v); });
-  if (o.onChange) inp.addEventListener('change', () => o.onChange(fromPos(+inp.value)));
-  row.append(lab, val, inp); parent.appendChild(row); return row;
-}
-function chips(parent, o) {   // o: {label, options:[{v,t,s}], value, onPick}
-  const row = document.createElement('div'); row.className = 'row';
-  const lab = document.createElement('span'); lab.className = 'lab'; lab.textContent = o.label;
-  const box = document.createElement('div'); box.className = 'chips'; box.setAttribute('role', 'group'); box.setAttribute('aria-label', o.label);
-  for (const opt of o.options) {
-    const b = document.createElement('button'); b.className = 'chip'; b.type = 'button';
-    b.setAttribute('aria-pressed', String(opt.v === o.value));
-    b.innerHTML = opt.t + (opt.s ? `<small>${opt.s}</small>` : '');
-    b.addEventListener('click', () => { for (const c of box.children) c.setAttribute('aria-pressed', String(c === b)); o.onPick(opt.v); });
-    box.appendChild(b);
-  }
-  row.append(lab, document.createElement('span'), box); parent.appendChild(row); return row;
-}
-function advGroup(parent, title, open) {
-  const d = document.createElement('details'); d.className = 'adv'; d.open = !!open;
-  const s = document.createElement('summary'); s.textContent = title;
-  const rows = document.createElement('div'); rows.className = 'rows';
-  d.append(s, rows); parent.appendChild(d); return rows;
-}
-
-// ---------------------------------------------------------------- sound (live)
-function live(key, v) { S.sound[key] = v; save(); host && stats && host.postMessage({ type: 'live', key, value: v }); }
-function fiLive(key, v) { S.fiSound[key] = v; save(); host && host.postMessage({ type: 'fi', fi: { [key]: v } }); }
-function renderSound() {
-  const el = $('rowsSound'); el.textContent = '';
-  const base = soundBase(), e = built || currentEngine(), fi = e.fi;
-  const get = (k) => (k in S.sound ? S.sound[k] : base[k]);
-  slider(el, { id: 'sVol', label: 'Volume', min: 0, max: 1.5, step: 0.01, value: S.volume, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => { S.volume = v; save(); if (master) master.gain.value = v; } });
-  const irRow = document.createElement('div'); irRow.className = 'row';
-  irRow.innerHTML = '<label for="sIr">Exhaust tone</label><span></span>';
-  const sel = document.createElement('select'); sel.id = 'sIr';
-  IR_NAMES.forEach((n, i) => { const o = document.createElement('option'); o.value = i; o.textContent = n; sel.appendChild(o); });
-  sel.value = String(get('exIr')); sel.addEventListener('input', () => live('exIr', +sel.value));
-  irRow.appendChild(sel); el.appendChild(irRow);
-  slider(el, { id: 'sExVol', label: 'Exhaust level', min: 0.02, max: 10, log: true, value: get('exAudioVolume'), fmt: (v) => v.toFixed(2) + '×', changed: 'exAudioVolume' in S.sound, onInput: (v) => live('exAudioVolume', v) });
-  slider(el, { id: 'sJit', label: 'Roughness', min: 0, max: 1.5, step: 0.01, value: get('jitter'), fmt: (v) => v.toFixed(2), changed: 'jitter' in S.sound, onInput: (v) => live('jitter', v) });
-  if (fi.type === 'turbo' || fi.type === 'twin') {
-    slider(el, { id: 'sTurbo', label: 'Turbo sound', min: 0, max: 3, step: 0.05, value: fi.turboLevel ?? 1.6, fmt: (v) => v.toFixed(2) + '×', onInput: (v) => fiLive('turboLevel', v) });
-    chips(el, { label: 'On lift', value: fi.bov ?? 0, options: [{ v: 0, t: 'Blow-off' }, { v: 1, t: 'Flutter' }, { v: 2, t: 'None' }], onPick: (v) => fiLive('bov', v) });
-  }
-  if (fi.type === 'sc' || fi.type === 'twin') {
-    slider(el, { id: 'sWhine', label: 'Blower whine', min: 0, max: 3, step: 0.05, value: fi.scLevel ?? 0.85, fmt: (v) => v.toFixed(2) + '×', onInput: (v) => fiLive('scLevel', v) });
-    slider(el, { id: 'sOff', label: 'Whine off-throttle', min: 0, max: 0.5, step: 0.01, value: fi.scOff ?? 0.07, fmt: (v) => Math.round(v * 100) + '%', onInput: (v) => fiLive('scOff', v) });
-  }
-  slider(el, { id: 'sLim', label: 'Rev limiter', min: 3000, max: 12000, step: 100, value: S.sound.revLimitRpm ?? e.params.revLimitRpm ?? (e.preset === 1 ? 6800 : 7500), fmt: (v) => v.toFixed(0) + ' rpm', changed: 'revLimitRpm' in S.sound, onInput: (v) => live('revLimitRpm', v) });
-}
-
-// ---------------------------------------------------------------- garage
-function renderGarage() {
-  const el = $('garage'); el.textContent = '';
-  const all = PRESETS.map((p) => ({ id: p.id, name: p.name, spec: p.spec, kind: 'preset' }))
-    .concat(S.mine.map((m, i) => ({ id: 'mine' + i, name: m.name || 'My build', spec: B.buildSpec(m).name, kind: 'mine', idx: i })));
-  for (const c of all) {
-    const b = document.createElement('div'); b.className = 'car'; b.setAttribute('role', 'button'); b.tabIndex = 0;
-    const active = (c.kind === 'preset' && S.cur.kind === 'preset' && S.cur.id === c.id) || (c.kind === 'mine' && S.cur.kind === 'custom' && S.cur.mine === c.idx);
-    if (active) b.classList.add('active');
-    b.innerHTML = `<b></b><span></span>`; b.querySelector('b').textContent = c.name; b.querySelector('span').textContent = c.spec;
-    if (c.kind === 'mine') { const x = document.createElement('button'); x.className = 'x'; x.textContent = 'Delete'; x.addEventListener('click', (ev) => { ev.stopPropagation(); S.mine.splice(c.idx, 1); save(); renderGarage(); }); b.appendChild(x); }
-    const pick = () => {
-      if (c.kind === 'preset') { S.cur = { kind: 'preset', id: c.id }; const p = PRESETS.find((x) => x.id === c.id); S.cfg = Object.assign({}, p.cfg); }
-      else { S.cfg = Object.assign({}, S.mine[c.idx]); S.cur = { kind: 'custom', cfg: S.cfg, mine: c.idx }; }
-      S.sound = {}; S.fiSound = {}; save(); renderBuilder(); dropIn();
-    };
-    b.addEventListener('click', pick); b.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick(); } });
-    el.appendChild(b);
-  }
-}
-function dropIn() {
-  const running = state && (state.on || state.starting);
-  rebuild(!!running);
-  renderGarage();
-  toast(running ? 'New engine in. Cranking…' : 'Engine ready. Tap Start.');
-}
-
-// ---------------------------------------------------------------- builder
-const ASP = [{ v: 'na', t: 'NA' }, { v: 'turbo', t: 'Turbo' }, { v: 'sc', t: 'Super' }, { v: 'twin', t: 'Twin', s: 'turbo + super' }];
-function setCfg(k, v, rerender) { S.cfg[k] = v; save(); if (rerender) renderBuilder(); else updateSummary(); }
-function renderBuilder() {
-  const el = $('rowsBuild'); el.textContent = '';
-  const c = S.cfg, L = B.LAYOUTS[c.layout] || B.LAYOUTS.I;
-  $('mSimple').setAttribute('aria-pressed', S.mode === 'simple'); $('mAdv').setAttribute('aria-pressed', S.mode === 'adv');
-  chips(el, { label: 'Layout', value: c.layout, options: [{ v: 'I', t: 'I', s: 'inline' }, { v: 'V', t: 'V', s: 'two banks' }, { v: 'VR', t: 'VR', s: 'narrow V' }, { v: 'F', t: 'Flat', s: 'boxer' }],
-    onPick: (v) => { const LL = B.LAYOUTS[v]; let n = clamp(c.cyl, LL.min, LL.max); if (LL.step === 2 && n % 2) n++; S.cfg.layout = v; S.cfg.cyl = n; delete S.cfg.vAngle; delete S.cfg.crank; save(); renderBuilder(); } });
-  // cylinders stepper
-  const row = document.createElement('div'); row.className = 'row';
-  row.innerHTML = '<span class="lab">Cylinders</span><span class="val"></span>';
-  const st = document.createElement('div'); st.className = 'stepper';
-  const minus = document.createElement('button'); minus.textContent = '−'; minus.setAttribute('aria-label', 'Fewer cylinders');
-  const out = document.createElement('output'); out.textContent = c.cyl;
-  const plus = document.createElement('button'); plus.textContent = '+'; plus.setAttribute('aria-label', 'More cylinders');
-  const step = (d) => { const n = clamp(c.cyl + d * L.step, L.min, L.max); if (n !== c.cyl) { S.cfg.cyl = n; delete S.cfg.vAngle; delete S.cfg.crank; save(); renderBuilder(); } };
-  minus.onclick = () => step(-1); plus.onclick = () => step(1);
-  st.append(minus, out, plus); row.appendChild(st); el.appendChild(row);
-  slider(el, { id: 'bLiters', label: 'Displacement', min: 0.3, max: 10, step: 0.1, value: c.liters, fmt: (v) => v.toFixed(1) + ' L', onInput: (v) => setCfg('liters', +v.toFixed(1)) });
-  chips(el, { label: 'Aspiration', value: c.aspiration || 'na', options: ASP, onPick: (v) => setCfg('aspiration', v, true) });
-  if ((c.aspiration || 'na') !== 'na')
-    slider(el, { id: 'bBoost', label: 'Boost', min: 3, max: 40, step: 0.5, value: c.boostPsi ?? (c.aspiration === 'twin' ? 20 : c.aspiration === 'sc' ? 10 : 15), fmt: (v) => v.toFixed(1) + ' psi', onInput: (v) => setCfg('boostPsi', v) });
-  slider(el, { id: 'bChar', label: 'Street ↔ Race', min: 0, max: 1, step: 0.01, value: c.character ?? 0.3, fmt: (v) => v < 0.25 ? 'Street' : v < 0.6 ? 'Sport' : v < 0.85 ? 'Track' : 'Race', onInput: (v) => setCfg('character', v) });
-  const cranks = B.crankOptions(c.layout, c.cyl);
-  if (cranks.length > 1) chips(el, { label: 'Crank', value: cranks.includes(c.crank) ? c.crank : cranks[0],
-    options: cranks.map((k) => ({ v: k, t: { cross: 'Cross-plane', flat: 'Flat-plane', even: 'Even fire' }[k], s: { cross: 'muscle burble', flat: 'exotic scream', even: 'smooth' }[k] })), onPick: (v) => setCfg('crank', v) });
-  const nm = document.createElement('div'); nm.className = 'row';
-  nm.innerHTML = '<label for="bName">Name</label><span></span>';
-  const ni = document.createElement('input'); ni.type = 'text'; ni.id = 'bName'; ni.placeholder = 'Auto'; ni.value = c.name || ''; ni.maxLength = 40;
-  ni.addEventListener('input', () => setCfg('name', ni.value.trim() || undefined));
-  nm.appendChild(ni); el.appendChild(nm);
-  if (S.mode === 'adv') renderAdvanced(el);
-  updateSummary();
-}
-function renderAdvanced(el) {
-  const c = S.cfg, sp = B.buildSpec(c), p = sp.params, asp = c.aspiration || 'na';
-  const opt = (k, v) => { if (v === undefined) delete S.cfg[k]; else S.cfg[k] = v; save(); updateSummary(); };
-  const geo = advGroup(el, 'Geometry', true);
-  slider(geo, { id: 'aBore', label: 'Bore', min: 50, max: 130, step: 0.5, value: c.boreMm ?? p.boreMm, changed: 'boreMm' in c, fmt: (v) => v.toFixed(1) + ' mm', onInput: (v) => { opt('boreMm', v); } });
-  slider(geo, { id: 'aStroke', label: 'Stroke', min: 40, max: 130, step: 0.5, value: c.strokeMm ?? p.strokeMm, changed: 'strokeMm' in c, fmt: (v) => v.toFixed(1) + ' mm', onInput: (v) => opt('strokeMm', v) });
-  if (c.layout === 'V') slider(geo, { id: 'aVang', label: 'V angle', min: 15, max: 150, step: 1, value: sp.vAngle, changed: 'vAngle' in c, fmt: (v) => v.toFixed(0) + '°', onInput: (v) => opt('vAngle', v) });
-  slider(geo, { id: 'aCr', label: 'Compression', min: 7, max: 14, step: 0.1, value: c.compression ?? (asp !== 'na' ? 9 : 10.2 + (c.character ?? 0.3)), changed: 'compression' in c, fmt: (v) => v.toFixed(1) + ':1', onInput: (v) => opt('compression', v) });
-  slider(geo, { id: 'aFly', label: 'Flywheel', min: 1, max: 30, step: 0.5, value: p.flywheelMassKg, changed: 'flywheelMassKg' in c, fmt: (v) => v.toFixed(1) + ' kg', onInput: (v) => opt('flywheelMassKg', v) });
-  const cam = advGroup(el, 'Cams');
-  slider(cam, { id: 'aDur', label: 'Duration @ 0.050″', min: 180, max: 310, step: 1, value: p.intakeDuration, changed: 'duration' in c, fmt: (v) => v.toFixed(0) + '°', onInput: (v) => opt('duration', v) });
-  slider(cam, { id: 'aLift', label: 'Valve lift', min: 5, max: 18, step: 0.1, value: p.intakeLiftMm, changed: 'liftMm' in c, fmt: (v) => v.toFixed(1) + ' mm', onInput: (v) => opt('liftMm', v) });
-  slider(cam, { id: 'aLsa', label: 'Lobe separation (lower = lumpier)', min: 100, max: 124, step: 0.5, value: p.intakeLobeCenter, changed: 'lsa' in c, fmt: (v) => v.toFixed(1) + '°', onInput: (v) => opt('lsa', v) });
-  const ex = advGroup(el, 'Exhaust');
-  chips(ex, { label: 'Headers', value: c.headers || 'equal', options: [{ v: 'equal', t: 'Equal length', s: 'clean' }, { v: 'unequal', t: 'Unequal', s: 'boxer rumble' }], onPick: (v) => opt('headers', v) });
-  slider(ex, { id: 'aExLen', label: 'Exhaust length', min: 20, max: 250, step: 1, value: c.exLengthIn ?? 100, changed: 'exLengthIn' in c, fmt: (v) => v.toFixed(0) + ' in', onInput: (v) => opt('exLengthIn', v) });
-  if (p.nEx === 2) slider(ex, { id: 'aSplit', label: 'Second pipe length', min: 0.4, max: 2.5, step: 0.05, value: c.pipeSplit ?? 1, changed: 'pipeSplit' in c, fmt: (v) => v.toFixed(2) + '×', onInput: (v) => opt('pipeSplit', v) });
-  if (asp === 'turbo' || asp === 'twin') {
-    const t = advGroup(el, 'Turbo', true);
-    slider(t, { id: 'aTsize', label: 'Turbo size (small = snappy, big = top end)', min: 0, max: 2, step: 0.05, value: c.turboSize ?? 1, changed: 'turboSize' in c, fmt: (v) => v < 0.6 ? 'Small' : v < 1.4 ? 'Medium' : 'Big', onInput: (v) => { opt('turboSize', v); delete S.cfg.spoolStart; delete S.cfg.spoolFull; delete S.cfg.spoolTime; } });
-    chips(t, { label: 'On lift', value: c.bov ?? 0, options: [{ v: 0, t: 'Blow-off' }, { v: 1, t: 'Flutter' }, { v: 2, t: 'None' }], onPick: (v) => opt('bov', v) });
-  }
-  if (asp === 'sc' || asp === 'twin') {
-    const s = advGroup(el, 'Supercharger', true);
-    chips(s, { label: 'Type', value: c.scType || 'screw', options: [{ v: 'screw', t: 'Twin-screw', s: 'SLR whine' }, { v: 'roots', t: 'Roots', s: 'deep whine' }, { v: 'centrifugal', t: 'Centrifugal', s: 'rising scream' }], onPick: (v) => opt('scType', v) });
-    slider(s, { id: 'aEee', label: '"Eee" colour', min: 0, max: 3, step: 0.05, value: c.scEee ?? 2, changed: 'scEee' in c, fmt: (v) => v.toFixed(2), onInput: (v) => opt('scEee', v) });
-    slider(s, { id: 'aChop', label: 'Engine chop in the whine', min: 0, max: 1, step: 0.01, value: c.scChop ?? 0.75, changed: 'scChop' in c, fmt: (v) => v.toFixed(2), onInput: (v) => opt('scChop', v) });
-    slider(s, { id: 'aPitch', label: 'Whine pitch', min: 0.6, max: 1.6, step: 0.01, value: c.scPitch ?? 1, changed: 'scPitch' in c, fmt: (v) => v.toFixed(2) + '×', onInput: (v) => opt('scPitch', v) });
-    if (asp === 'twin') slider(s, { id: 'aHand', label: 'Blower hands off to turbo at', min: 2000, max: 7000, step: 100, value: sp.fi.handover, changed: 'handover' in c, fmt: (v) => v.toFixed(0) + ' rpm', onInput: (v) => opt('handover', v) });
-  }
-  const lim = advGroup(el, 'Limits & physics');
-  slider(lim, { id: 'aRev', label: 'Rev limiter', min: 3000, max: 13000, step: 100, value: p.revLimitRpm, changed: 'revLimitRpm' in c, fmt: (v) => v.toFixed(0) + ' rpm', onInput: (v) => opt('revLimitRpm', v) });
-  chips(lim, { label: 'Physics quality (lower if the sound gaps)', value: S.quality, options: QUALITY.map((q, i) => ({ v: i, t: q.name })), onPick: (v) => { S.quality = v; save(); } });
-}
-function updateSummary() {
-  const sp = B.buildSpec(S.cfg), p = sp.params;
-  const psi = Math.max(sp.fi.turboPsi, sp.fi.scPsi);
-  const fi = sp.fi.type === 'na' ? 'naturally aspirated' : `${psi.toFixed(0)} psi ${{ turbo: 'turbo', sc: 'supercharged', twin: 'twin-charged' }[sp.fi.type]}`;
-  $('buildSummary').textContent = `${sp.name} · ${p.boreMm.toFixed(1)} × ${p.strokeMm.toFixed(1)} mm · ${fi} · firing ${sp.order.join('-')} · limiter ${p.revLimitRpm} rpm` + (sp.n > 8 ? ' · big engine: heavier on your CPU' : '');
-}
-$('mSimple').onclick = () => { S.mode = 'simple'; save(); renderBuilder(); };
-$('mAdv').onclick = () => { S.mode = 'adv'; save(); renderBuilder(); };
-$('buildGo').onclick = () => { S.cur = { kind: 'custom', cfg: Object.assign({}, S.cfg) }; S.sound = {}; S.fiSound = {}; save(); dropIn(); };
-$('buildSave').onclick = () => { const cfg = Object.assign({}, S.cfg); if (!cfg.name) cfg.name = B.buildSpec(cfg).name; S.mine.push(cfg); S.cur = { kind: 'custom', cfg, mine: S.mine.length - 1 }; save(); renderGarage(); toast('Saved to your garage.'); };
-$('copy').onclick = () => {
-  const txt = JSON.stringify(S.cfg); $('paste').value = txt;
-  navigator.clipboard && navigator.clipboard.writeText(txt).then(() => toast('Copied.'), () => { $('paste').select(); toast('Select and copy the text.'); });
-};
-$('load').onclick = () => {
-  try { const c = JSON.parse($('paste').value); if (!c || !B.LAYOUTS[c.layout]) throw new Error('needs a layout of I, V, VR or F'); S.cfg = c; save(); renderBuilder(); toast('Loaded. Tap Build & start.'); }
-  catch (e) { toast('That isn’t a build: ' + e.message); }
-};
-
-// ---------------------------------------------------------------- dyno
-let dyn = { run: null, from: 1500, to: 7000 };
-$('dynoRun').onclick = async () => {
-  if (state && state.dyno) { host.postMessage({ type: 'dyno', action: 'stop' }); return; }
-  if (!ctx) { await startPressed(); toast('Starting the engine, then tap Run again.'); return; }
-  host.postMessage({ type: 'dyno', action: 'start' });
-};
-$('dynoClear').onclick = () => { S.dynoPrev = null; S.dynoLast = null; dyn.run = null; save(); drawDyno(); showPeaks(null); };
-function dynoBegin(m) { if (S.dynoLast) S.dynoPrev = S.dynoLast; dyn.run = { name: built ? built.name : '', pts: [] }; dyn.from = m.from; dyn.to = m.to; $('dynoRun').textContent = 'Stop'; $('dynoMsg').textContent = 'Pulling… full throttle, neutral.'; }
-function dynoAdd(pts) { if (dyn.run) dyn.run.pts.push(...pts); }
-function dynoEnd(finished) {
-  $('dynoRun').textContent = 'Run a pull';
-  if (dyn.run && finished && dyn.run.pts.length > 20) { S.dynoLast = dyn.run; save(); }
-  if (dyn.run) { const pk = peaks(dyn.run); showPeaks(pk); $('dynoMsg').textContent = finished && pk ? `${dyn.run.name}: ${pk.hp.toFixed(0)} hp at ${pk.hpR} rpm, ${pk.tq.toFixed(0)} lb-ft at ${pk.tqR} rpm.` : 'Pull stopped.'; }
-}
-function smooth(pts) {   // [rpm, tq, psi] -> smoothed over ~0.25 s
-  const out = [], w = 7;
-  for (let i = 0; i < pts.length; i++) { let a = 0, n = 0; for (let j = Math.max(0, i - w); j <= Math.min(pts.length - 1, i + w); j++) { a += pts[j][1]; n++; } out.push([pts[i][0], a / n, pts[i][2]]); }
-  return out;
-}
-function peaks(run) {
-  if (!run || run.pts.length < 10) return null;
-  let hp = 0, hpR = 0, tq = 0, tqR = 0, psi = 0;
-  for (const [r, t, p] of smooth(run.pts)) { const h = t * r / 5252; if (h > hp) { hp = h; hpR = r; } if (t > tq) { tq = t; tqR = r; } psi = Math.max(psi, p); }
-  return { hp, hpR, tq, tqR, psi };
-}
-function showPeaks(pk) {
-  $('pkHp').textContent = pk ? pk.hp.toFixed(0) : '–'; $('pkHpR').textContent = pk ? '@ ' + pk.hpR + ' rpm' : ' ';
-  $('pkTq').textContent = pk ? pk.tq.toFixed(0) : '–'; $('pkTqR').textContent = pk ? '@ ' + pk.tqR + ' rpm' : ' ';
-  $('pkPsi').textContent = pk && pk.psi > 0.5 ? pk.psi.toFixed(1) : '–';
-}
-function drawDyno() {
-  if ($('p-dyno').hidden) return;
-  const [c, w, h] = fitCanvas($('dynoCv'));
-  c.clearRect(0, 0, w, h);
-  const runs = [S.dynoPrev, dyn.run].filter((r) => r && r.pts.length > 3).map((r) => ({ r, s: smooth(r.pts) }));
-  let maxR = 7000, maxV = 100;
-  for (const { s } of runs) for (const [r, t] of s) { maxR = Math.max(maxR, r); maxV = Math.max(maxV, t, t * r / 5252); }
-  maxR = Math.ceil(maxR / 1000) * 1000; const stepV = maxV > 600 ? 200 : maxV > 250 ? 100 : 50; maxV = Math.ceil(maxV * 1.08 / stepV) * stepV;
-  const L = 40, R = 10, T = 10, Bm = 26, X = (r) => L + (w - L - R) * r / maxR, Y = (v) => T + (h - T - Bm) * (1 - v / maxV);
-  c.font = `500 11px ${css('--mono')}`; c.fillStyle = css('--muted'); c.strokeStyle = css('--line'); c.lineWidth = 1;
-  c.textAlign = 'right'; c.textBaseline = 'middle';
-  for (let v = 0; v <= maxV; v += stepV) { c.beginPath(); c.moveTo(L, Y(v)); c.lineTo(w - R, Y(v)); c.stroke(); c.fillText(String(v), L - 6, Y(v)); }
-  c.textAlign = 'center'; c.textBaseline = 'top';
-  for (let r = 0; r <= maxR; r += 1000) c.fillText(r ? String(r / 1000) + 'k' : '0', X(r), h - Bm + 6);
-  runs.forEach(({ r, s }, i) => {
-    const prev = runs.length === 2 && i === 0;
-    for (const [col, f] of [[prev ? css('--muted') : css('--amber'), (p) => p[1] * p[0] / 5252], [prev ? css('--muted') : css('--blue'), (p) => p[1]]]) {
-      c.strokeStyle = col; c.lineWidth = prev ? 1.5 : 2.5; c.setLineDash(prev ? [4, 4] : []);
-      c.beginPath(); s.forEach((p, k) => (k ? c.lineTo(X(p[0]), Y(f(p))) : c.moveTo(X(p[0]), Y(f(p))))); c.stroke();
-    }
-    c.setLineDash([]);
-  });
-  if (state && state.dyno) { c.strokeStyle = css('--red'); c.lineWidth = 1; c.beginPath(); c.moveTo(X(state.rpm), T); c.lineTo(X(state.rpm), h - Bm); c.stroke(); }
-  if (!runs.length) { c.fillStyle = css('--muted'); c.font = `500 13px ${css('--display')}`; c.textBaseline = 'middle'; c.fillText('No pulls yet', w / 2, h / 2); }
-}
-
-// ---------------------------------------------------------------- drawing
-function fitCanvas(cv) {
-  const r = cv.getBoundingClientRect(), d = Math.min(2, window.devicePixelRatio || 1);
-  const w = Math.max(1, Math.round(r.width * d)), h = Math.max(1, Math.round(r.height * d));
-  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
-  const c = cv.getContext('2d'); c.setTransform(d, 0, 0, d, 0, 0); return [c, r.width, r.height];
-}
-const cssCache = {}; const css = (n) => cssCache[n] || (cssCache[n] = getComputedStyle(document.documentElement).getPropertyValue(n).trim());
-let shownRpm = 0, phase = 0, lastFrame = performance.now(), lowCpuT = 0;
-function frame(now) {
-  const dt = Math.min(0.1, (now - lastFrame) / 1000); lastFrame = now;
-  const rpm = state ? state.rpm : 0;
-  shownRpm += (rpm - shownRpm) * Math.min(1, dt / 0.05);
-  const e = built || currentEngine();
-  const limit = S.sound.revLimitRpm ?? e.params.revLimitRpm ?? (e.preset === 1 ? 6800 : 7500);
-  const redline = stats ? stats.redline : limit - 500;
-  drawTach(shownRpm, redline, limit);
-  if (state) {
-    if ($('slowmo').checked) phase = (phase + rpm * 6 * dt / 40) % 720;
-    else phase = ((state.cyc + rpm * 6 * (now - state.t) / 1000) % 720 + 720) % 720;
-    $('roGear').textContent = $('gearBig').textContent = state.gear < 0 ? 'N' : String(state.gear + 1);
-    $('roMph').textContent = state.mph.toFixed(0);
-    $('roBoost').textContent = e.fi.type === 'na' ? state.map.toFixed(1) : state.psi.toFixed(1);
-    $('cpu').textContent = 'CPU ' + Math.min(999, 100 / Math.max(0.01, state.rtf)).toFixed(0) + '%';
-    lowCpuT = state.rtf < 1.08 && state.on ? lowCpuT + dt : 0;
-    const st = $('status'), sb = $('startBtn');
-    if (state.starting) { st.textContent = 'Cranking'; st.className = 'pill warn'; sb.textContent = 'Cranking'; sb.className = 'start cranking'; }
-    else if (state.on) { st.textContent = state.dyno ? 'On the dyno' : lowCpuT > 2 ? 'CPU maxed: lower quality' : 'Running'; st.className = lowCpuT > 2 ? 'pill warn' : 'pill live'; sb.textContent = 'Stop'; sb.className = 'start on'; }
-    else { st.textContent = 'Off'; st.className = 'pill'; sb.textContent = 'Start'; sb.className = 'start'; }
-  }
-  if (!$('p-drive').hidden) drawFire(phase);
-  drawDyno();
-  requestAnimationFrame(frame);
-}
-function drawTach(rpm, redline, limit) {
-  const [c, w, h] = fitCanvas($('tach'));
-  c.clearRect(0, 0, w, h);
-  const max = Math.max(8000, Math.ceil((limit + 600) / 1000) * 1000);
-  const cx = w / 2, cy = h * 0.56, R = Math.min(w * 0.46, h * 0.52);
-  const a0 = Math.PI * 0.75, a1 = Math.PI * 2.25, ang = (v) => a0 + (a1 - a0) * clamp(v / max, 0, 1);
-  c.lineCap = 'butt';
-  c.strokeStyle = css('--line'); c.lineWidth = 10; c.beginPath(); c.arc(cx, cy, R, a0, a1); c.stroke();
-  c.strokeStyle = css('--red'); c.beginPath(); c.arc(cx, cy, R, ang(redline), a1); c.stroke();
-  c.strokeStyle = css('--amber'); c.beginPath(); c.arc(cx, cy, R, a0, ang(rpm)); c.stroke();
-  const big = max > 10000 ? 2000 : 1000;
-  c.font = `600 ${Math.round(R * 0.12)}px ${css('--display')}`; c.textAlign = 'center'; c.textBaseline = 'middle';
-  for (let v = 0; v <= max; v += big / 2) {
-    const a = ang(v), major = v % big === 0;
-    c.strokeStyle = v >= redline ? css('--red') : (major ? css('--fg') : css('--muted'));
-    c.lineWidth = major ? 2.5 : 1.2;
-    const r1 = R - 14, r2 = R - (major ? 28 : 21);
-    c.beginPath(); c.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1); c.lineTo(cx + Math.cos(a) * r2, cy + Math.sin(a) * r2); c.stroke();
-    if (major) { c.fillStyle = v >= redline ? css('--red') : css('--fg'); c.fillText(String(v / 1000), cx + Math.cos(a) * (R - 46), cy + Math.sin(a) * (R - 46)); }
-  }
-  c.strokeStyle = css('--red'); c.lineWidth = 3; const al = ang(limit);
-  c.beginPath(); c.moveTo(cx + Math.cos(al) * (R + 8), cy + Math.sin(al) * (R + 8)); c.lineTo(cx + Math.cos(al) * (R - 8), cy + Math.sin(al) * (R - 8)); c.stroke();
-  const an = ang(rpm);
-  c.strokeStyle = css('--amber'); c.lineWidth = 3.5; c.lineCap = 'round';
-  c.beginPath(); c.moveTo(cx - Math.cos(an) * 14, cy - Math.sin(an) * 14); c.lineTo(cx + Math.cos(an) * (R - 20), cy + Math.sin(an) * (R - 20)); c.stroke();
-  c.fillStyle = css('--panel-2'); c.beginPath(); c.arc(cx, cy, 9, 0, Math.PI * 2); c.fill();
-  c.fillStyle = css('--fg'); c.font = `500 ${Math.round(R * 0.26)}px ${css('--mono')}`;
-  c.fillText(Math.round(rpm).toString(), cx, cy + R * 0.42);
-  c.fillStyle = css('--muted'); c.font = `600 ${Math.round(R * 0.085)}px ${css('--display')}`;
-  c.fillText('RPM × 1000', cx, cy + R * 0.66);
-}
-function drawFire(ph) {
-  const [c, w, h] = fitCanvas($('fireCv'));
-  c.clearRect(0, 0, w, h);
-  if (!stats) { c.fillStyle = css('--muted'); c.font = `500 13px ${css('--display')}`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('Start the engine to see it fire', w / 2, h / 2); return; }
-  const n = stats.cyl, fire = stats.fire, bank = stats.bank, nums = (built && built.cylNums) || fire.map((_, i) => i + 1);
-  const banks = Math.max(...bank) + 1, per = [0, 0]; bank.forEach((b) => per[b]++);
-  const maxPer = Math.max(...per), gap = Math.min(46, (w - 56) / maxPer), r = Math.min(15, gap * 0.38, h / (banks * 2) - 6);
-  const idx = [0, 0];
-  for (let i = 0; i < n; i++) {
-    const b = bank[i] || 0, k = idx[b]++;
-    const x0 = 28 + (w - 28) / 2 - gap * (per[b] - 1) / 2;
-    const x = x0 + k * gap + (banks === 2 && b === 1 ? gap * 0.25 : 0);
-    const y = banks === 1 ? h / 2 : (b === 0 ? h * 0.28 : h * 0.72);
-    const d = (((ph - fire[i]) % 720) + 720) % 720, glow = Math.exp(-d / 55);
-    c.fillStyle = css('--panel-2'); c.strokeStyle = css('--line'); c.lineWidth = 1.5;
-    c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill(); c.stroke();
-    if (glow > 0.02) {
-      c.globalAlpha = glow; c.fillStyle = css('--amber'); c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill();
-      c.globalAlpha = glow * 0.35; c.beginPath(); c.arc(x, y, r * 1.7, 0, Math.PI * 2); c.fill(); c.globalAlpha = 1;
-    }
-    c.fillStyle = glow > 0.5 ? '#1b1206' : css('--fg'); c.font = `600 ${Math.round(r * 0.95)}px ${css('--mono')}`; c.textAlign = 'center'; c.textBaseline = 'middle';
-    c.fillText(String(nums[i]), x, y + 1);
-  }
-  if (banks === 2) { c.fillStyle = css('--muted'); c.font = `600 11px ${css('--display')}`; c.textAlign = 'left'; c.fillText('A', 2, h * 0.28); c.fillText('B', 2, h * 0.72); }
-}
-
-// ---------------------------------------------------------------- boot
-try { const t = localStorage.getItem('motorsync_tab'); if (TABS.includes(t)) showTab(t); } catch (e) {}
-built = currentEngine(); $('engName').textContent = built.name;
-dyn.run = S.dynoLast || null;
-renderSound(); renderGarage(); renderBuilder(); showPeaks(peaks(dyn.run));
-startHost().catch((e) => toast('The engine simulator failed to load: ' + e.message));
-requestAnimationFrame(frame);
-</script>
+<script>/*__CAR_INLINE__*/</script>
+/*__MAIN_SCRIPT__*/
